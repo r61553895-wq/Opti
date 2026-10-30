@@ -1,0 +1,80 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.12
+
+      - name: Build jar
+        run: gradle build --no-daemon
+
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: maxperf-mod
+          path: build/libs/*.jar
+
+      - name: Release (on tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/libs/*.jar
+
+  performance-pack:
+    # Скачивает последние версии оптимизирующих модов с Modrinth под 1.21.4 Fabric
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: maxperf-mod
+          path: pack
+
+      - name: Download performance mods from Modrinth
+        run: |
+          cd pack
+          for slug in fabric-api sodium sodium-extra reeses-sodium-options lithium ferrite-core immediatelyfast entityculling moreculling modernfix krypton c2me-fabric scalablelux noisium badoptimizations dynamic-fps memoryleakfix threadtweak cull-less-leaves vmp-fabric; do
+            url=$(curl -s -G "https://api.modrinth.com/v2/project/$slug/version" \
+              --data-urlencode 'game_versions=["1.21.4"]' \
+              --data-urlencode 'loaders=["fabric"]' \
+              -H "User-Agent: maxperf-workflow" \
+              | jq -r '[.[0].files[] | select(.primary)][0].url // empty')
+            if [ -n "$url" ]; then
+              echo "Downloading $slug"
+              curl -sL -O "$url"
+            else
+              echo "::warning::No 1.21.4 Fabric build for $slug"
+            fi
+          done
+          ls -la
+
+      - name: Zip mods folder
+        run: |
+          cd pack
+          zip -r ../maxperf-mods-folder.zip *.jar
+
+      - name: Upload performance pack (zip, just unpack into .minecraft/mods)
+        uses: actions/upload-artifact@v4
+        with:
+          name: maxperf-pack-all-mods
+          path: maxperf-mods-folder.zip
